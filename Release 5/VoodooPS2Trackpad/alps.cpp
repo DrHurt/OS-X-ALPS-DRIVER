@@ -542,23 +542,6 @@ int ApplePS2ALPSGlidePoint::processBitmap(struct alps_data *priv,
     return fingers;
 }
 
-void ApplePS2ALPSGlidePoint::processPacketV3(UInt8 *packet) {
-    /*
-     * v3 protocol packets come in three types, two representing
-     * touchpad data and one representing trackstick data.
-     * Trackstick packets seem to be distinguished by always
-     * having 0x3f in the last byte. This value has never been
-     * observed in the last byte of either of the other types
-     * of packets.
-     */
-    if (packet[5] == 0x3f) {
-        processTrackstickPacketV3(packet);
-        return;
-    }
-    
-    processTouchpadPacketV3(packet);
-}
-
 void ApplePS2ALPSGlidePoint::processTrackstickPacketV3(UInt8 *packet) {
     int x, y, z, left, right, middle;
     uint64_t now_abs;
@@ -642,7 +625,95 @@ void ApplePS2ALPSGlidePoint::processTrackstickPacketV3(UInt8 *packet) {
     }
 }
 
-void ApplePS2ALPSGlidePoint::processTouchpadPacketV3(UInt8 *packet) {
+void ApplePS2ALPSGlidePoint::decodeButtonsV3(struct alps_fields *f, unsigned char *p) {
+    f->left = !!(p[3] & 0x01);
+    f->right = !!(p[3] & 0x02);
+    f->middle = !!(p[3] & 0x04);
+    
+    f->ts_left = !!(p[3] & 0x10);
+    f->ts_right = !!(p[3] & 0x20);
+    f->ts_middle = !!(p[3] & 0x40);
+}
+
+void ApplePS2ALPSGlidePoint::decodePinnacle(struct alps_fields *f, UInt8 *p) {
+    f->first_mp = !!(p[4] & 0x40);
+    f->is_mp = !!(p[0] & 0x40);
+    
+    if (f->is_mp) {
+        f->fingers = (p[5] & 0x3) + 1;
+        f->x_map = ((p[4] & 0x7e) << 8) |
+        ((p[1] & 0x7f) << 2) |
+        ((p[0] & 0x30) >> 4);
+        f->y_map = ((p[3] & 0x70) << 4) |
+        ((p[2] & 0x7f) << 1) |
+        (p[4] & 0x01);
+    } else {
+        f->st.x = ((p[1] & 0x7f) << 4) | ((p[4] & 0x30) >> 2) |
+        ((p[0] & 0x30) >> 4);
+        f->st.y = ((p[2] & 0x7f) << 4) | (p[4] & 0x0f);
+        f->pressure = p[5] & 0x7f;
+        
+        decodeButtonsV3(f, p);
+    }
+}
+
+void ApplePS2ALPSGlidePoint::decodeRushmore(struct alps_fields *f, UInt8 *p) {
+    f->first_mp = !!(p[4] & 0x40);
+    f->is_mp = !!(p[5] & 0x40);
+    
+    if (f->is_mp) {
+        f->fingers = max((p[5] & 0x3), ((p[5] >> 2) & 0x3)) + 1;
+        f->x_map = ((p[5] & 0x10) << 11) |
+        ((p[4] & 0x7e) << 8) |
+        ((p[1] & 0x7f) << 2) |
+        ((p[0] & 0x30) >> 4);
+        f->y_map = ((p[5] & 0x20) << 6) |
+        ((p[3] & 0x70) << 4) |
+        ((p[2] & 0x7f) << 1) |
+        (p[4] & 0x01);
+    } else {
+        f->st.x = ((p[1] & 0x7f) << 4) | ((p[4] & 0x30) >> 2) |
+        ((p[0] & 0x30) >> 4);
+        f->st.y = ((p[2] & 0x7f) << 4) | (p[4] & 0x0f);
+        f->pressure = p[5] & 0x7f;
+        
+        decodeButtonsV3(f, p);
+    }
+}
+
+void ApplePS2ALPSGlidePoint::decodeDolphin(struct alps_fields *f, UInt8 *p) {
+    uint64_t palm_data = 0;
+    
+    f->first_mp = !!(p[0] & 0x02);
+    f->is_mp = !!(p[0] & 0x20);
+    
+    if (!f->is_mp) {
+        f->st.x = ((p[1] & 0x7f) | ((p[4] & 0x0f) << 7));
+        f->st.y = ((p[2] & 0x7f) | ((p[4] & 0xf0) << 3));
+        f->pressure = (p[0] & 4) ? 0 : p[5] & 0x7f;
+        decodeButtonsV3(f, p);
+    } else {
+        f->fingers = ((p[0] & 0x6) >> 1 |
+                      (p[0] & 0x10) >> 2);
+        
+        palm_data = (p[1] & 0x7f) |
+        ((p[2] & 0x7f) << 7) |
+        ((p[4] & 0x7f) << 14) |
+        ((p[5] & 0x7f) << 21) |
+        ((p[3] & 0x07) << 28) |
+        (((uint64_t)p[3] & 0x70) << 27) |
+        (((uint64_t)p[0] & 0x01) << 34);
+        
+        /* Y-profile is stored in P(0) to p(n-1), n = y_bits; */
+        f->y_map = palm_data & (BIT(priv.y_bits) - 1);
+        
+        /* X-profile is stored in p(n) to p(n+m-1), m = x_bits; */
+        f->x_map = (palm_data >> priv.y_bits) &
+        (BIT(priv.x_bits) - 1);
+    }
+}
+
+void ApplePS2ALPSGlidePoint::alps_process_touchpad_packet_v3_v5(UInt8 *packet) {
     int fingers = 0;
     UInt32 buttons = 0;
     uint64_t now_abs;
@@ -742,92 +813,21 @@ void ApplePS2ALPSGlidePoint::processTouchpadPacketV3(UInt8 *packet) {
     dispatchEventsWithInfo(f.mt[0].x, f.mt[0].y, f.pressure, fingers, buttons);
 }
 
-void ApplePS2ALPSGlidePoint::decodeButtonsV3(struct alps_fields *f, unsigned char *p) {
-    f->left = !!(p[3] & 0x01);
-    f->right = !!(p[3] & 0x02);
-    f->middle = !!(p[3] & 0x04);
-    
-    f->ts_left = !!(p[3] & 0x10);
-    f->ts_right = !!(p[3] & 0x20);
-    f->ts_middle = !!(p[3] & 0x40);
-}
-
-void ApplePS2ALPSGlidePoint::decodePinnacle(struct alps_fields *f, UInt8 *p) {
-    f->first_mp = !!(p[4] & 0x40);
-    f->is_mp = !!(p[0] & 0x40);
-    
-    if (f->is_mp) {
-        f->fingers = (p[5] & 0x3) + 1;
-        f->x_map = ((p[4] & 0x7e) << 8) |
-        ((p[1] & 0x7f) << 2) |
-        ((p[0] & 0x30) >> 4);
-        f->y_map = ((p[3] & 0x70) << 4) |
-        ((p[2] & 0x7f) << 1) |
-        (p[4] & 0x01);
-    } else {
-        f->st.x = ((p[1] & 0x7f) << 4) | ((p[4] & 0x30) >> 2) |
-        ((p[0] & 0x30) >> 4);
-        f->st.y = ((p[2] & 0x7f) << 4) | (p[4] & 0x0f);
-        f->pressure = p[5] & 0x7f;
-        
-        decodeButtonsV3(f, p);
+void ApplePS2ALPSGlidePoint::processPacketV3(UInt8 *packet) {
+    /*
+     * v3 protocol packets come in three types, two representing
+     * touchpad data and one representing trackstick data.
+     * Trackstick packets seem to be distinguished by always
+     * having 0x3f in the last byte. This value has never been
+     * observed in the last byte of either of the other types
+     * of packets.
+     */
+    if (packet[5] == 0x3f) {
+        processTrackstickPacketV3(packet);
+        return;
     }
-}
-
-void ApplePS2ALPSGlidePoint::decodeRushmore(struct alps_fields *f, UInt8 *p) {
-    f->first_mp = !!(p[4] & 0x40);
-    f->is_mp = !!(p[5] & 0x40);
     
-    if (f->is_mp) {
-        f->fingers = max((p[5] & 0x3), ((p[5] >> 2) & 0x3)) + 1;
-        f->x_map = ((p[5] & 0x10) << 11) |
-        ((p[4] & 0x7e) << 8) |
-        ((p[1] & 0x7f) << 2) |
-        ((p[0] & 0x30) >> 4);
-        f->y_map = ((p[5] & 0x20) << 6) |
-        ((p[3] & 0x70) << 4) |
-        ((p[2] & 0x7f) << 1) |
-        (p[4] & 0x01);
-    } else {
-        f->st.x = ((p[1] & 0x7f) << 4) | ((p[4] & 0x30) >> 2) |
-        ((p[0] & 0x30) >> 4);
-        f->st.y = ((p[2] & 0x7f) << 4) | (p[4] & 0x0f);
-        f->pressure = p[5] & 0x7f;
-        
-        decodeButtonsV3(f, p);
-    }
-}
-
-void ApplePS2ALPSGlidePoint::decodeDolphin(struct alps_fields *f, UInt8 *p) {
-    uint64_t palm_data = 0;
-    
-    f->first_mp = !!(p[0] & 0x02);
-    f->is_mp = !!(p[0] & 0x20);
-    
-    if (!f->is_mp) {
-        f->st.x = ((p[1] & 0x7f) | ((p[4] & 0x0f) << 7));
-        f->st.y = ((p[2] & 0x7f) | ((p[4] & 0xf0) << 3));
-        f->pressure = (p[0] & 4) ? 0 : p[5] & 0x7f;
-        decodeButtonsV3(f, p);
-    } else {
-        f->fingers = ((p[0] & 0x6) >> 1 |
-                      (p[0] & 0x10) >> 2);
-        
-        palm_data = (p[1] & 0x7f) |
-        ((p[2] & 0x7f) << 7) |
-        ((p[4] & 0x7f) << 14) |
-        ((p[5] & 0x7f) << 21) |
-        ((p[3] & 0x07) << 28) |
-        (((uint64_t)p[3] & 0x70) << 27) |
-        (((uint64_t)p[0] & 0x01) << 34);
-        
-        /* Y-profile is stored in P(0) to p(n-1), n = y_bits; */
-        f->y_map = palm_data & (BIT(priv.y_bits) - 1);
-        
-        /* X-profile is stored in p(n) to p(n+m-1), m = x_bits; */
-        f->x_map = (palm_data >> priv.y_bits) &
-        (BIT(priv.x_bits) - 1);
-    }
+    alps_process_touchpad_packet_v3_v5(packet);
 }
 
 void ApplePS2ALPSGlidePoint::processPacketV4(UInt8 *packet) {
@@ -1895,10 +1895,6 @@ bool ApplePS2ALPSGlidePoint::passthroughModeV2(bool enable) {
     assert(request.commandsCount <= countof(request.commands));
     _device->submitRequestAndBlock(&request);
     
-    // TODO: drain a possible 3 extra bytes from the command port
-    /* we may get 3 more bytes, just ignore them */
-    //ps2_drain(ps2dev, 3, 100);
-    
     return request.commandsCount == 4;
 };
 
@@ -2360,10 +2356,7 @@ bool ApplePS2ALPSGlidePoint::alps_hw_init_dolphin_v2()
     /* set power mode */
     alps_short_cmd_v5(kDP_MouseSetPoll, 0x57);
     
-    /*
-     * TODO: For Dolphin V2 touchpads, the threshold should be calculated
-     * from the OTP settings instead.
-     */
+    
     enterCommandMode();
     
     commandModeWriteReg(0x001f, 0x09);
@@ -2453,7 +2446,7 @@ void ApplePS2ALPSGlidePoint::setDefaults() {
             break;
         case ALPS_PROTO_V5:
             hw_init = &ApplePS2ALPSGlidePoint::hwInitDolphinV1;
-            process_packet = &ApplePS2ALPSGlidePoint::processPacketV3;
+            process_packet = &ApplePS2ALPSGlidePoint::alps_process_touchpad_packet_v3_v5;
             decode_fields = &ApplePS2ALPSGlidePoint::decodeDolphin;
             //            set_abs_params = alps_set_abs_params_mt;
             priv.nibble_commands = alps_v3_nibble_commands;
@@ -2527,6 +2520,7 @@ IOReturn ApplePS2ALPSGlidePoint::identify() {
     
     if (matchTable(&e7, &ec)) {
         return 0;
+        
     } else if (e7.bytes[0] == 0x73 && e7.bytes[1] == 0x03 && e7.bytes[2] == 0x50 &&
                ec.bytes[0] == 0x73 && (ec.bytes[1] == 0x01 || ec.bytes[1] == 0x02)) {
         priv.proto_version = ALPS_PROTO_V5;
@@ -2534,16 +2528,20 @@ IOReturn ApplePS2ALPSGlidePoint::identify() {
         IOLog("ALPS: Found a V5 Dolphin touchpad with ID: E7=0x%02x 0x%02x 0x%02x, EC=0x%02x 0x%02x 0x%02x\n", e7.bytes[0], e7.bytes[1], e7.bytes[2], ec.bytes[0], ec.bytes[1], ec.bytes[2]);
         if (ec.bytes[1] == 0x02) {
             hw_init = &ApplePS2ALPSGlidePoint::alps_hw_init_dolphin_v2;
+            IOLog("ALPS: Dolphin hardware rev. 2 detected. Support is experimental...\n");
         }
+        
     } else if (ec.bytes[0] == 0x88 && ec.bytes[1] == 0x08) {
         priv.proto_version = ALPS_PROTO_V3_RUSHMORE;
         setDefaults();
         IOLog("ALPS: Found a V3 Rushmore touchpad with ID: E7=0x%02x 0x%02x 0x%02x, EC=0x%02x 0x%02x 0x%02x\n", e7.bytes[0], e7.bytes[1], e7.bytes[2], ec.bytes[0], ec.bytes[1], ec.bytes[2]);
+        
     } else if (ec.bytes[0] == 0x88 && ec.bytes[1] == 0x07 &&
                ec.bytes[2] >= 0x90 && ec.bytes[2] <= 0x9d) {
         priv.proto_version = ALPS_PROTO_V3;
         setDefaults();
         IOLog("ALPS: Found a V3 Pinnacle touchpad with ID: E7=0x%02x 0x%02x 0x%02x, EC=0x%02x 0x%02x 0x%02x\n", e7.bytes[0], e7.bytes[1], e7.bytes[2], ec.bytes[0], ec.bytes[1], ec.bytes[2]);
+        
     } else {
         IOLog("ALPS: Touchpad id didn't match V1-V5: E7=0x%02x 0x%02x 0x%02x, EC=0x%02x 0x%02x 0x%02x\n",
               e7.bytes[0], e7.bytes[1], e7.bytes[2], ec.bytes[0], ec.bytes[1], ec.bytes[2]);

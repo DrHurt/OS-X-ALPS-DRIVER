@@ -258,7 +258,7 @@ protected:
     
     void processTrackstickPacketV3(UInt8 * packet);
     
-    void processTouchpadPacketV3(UInt8 * packet);
+    void alps_process_touchpad_packet_v3_v5(UInt8 * packet);
     
     int processBitmap(struct alps_data *priv,
                       struct alps_fields *f);
