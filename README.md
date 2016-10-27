@@ -4,9 +4,24 @@ This is a driver created for my personal use and optimized for my ALPS V3 Pinnac
 
 The Driver is based on Rehabman's VoodooPS2 driver for OS X and bpedman's Linux port of the ALPS driver
 
-What's new compared to the bpedman merge:
-- Fixed bitmap processing. It's now able to track and report coordinates for 2 fingers simultaneously
-- Removed the hardcoded ALPS profile from the kext and added it to the info.plist
-- Fined tuned (and removed all synaptics specific variables) from the ALPS profile
-- Applied Sierra OS X memory management fix by RehabMan ti avoid kernel Panic
-- more...
+Driver Features:
+- Supports ALPS hardware versions V1-V5
+- Supports Mac OS 10.6 to 10.12
+- 1-finger tapping.
+- Side (edge) scrolling (Vertical with inertia, and Horizontal).
+- 2-finger tap for right click.
+- 2-finger scrolling (vertical and horizontal with inertia).
+- 3 and 4-finger gestures (V3+, check the log to find out your hw version).
+- Pointer acceleration and smoothing.
+- Trackstick (movement and scrolling).
+==========================================
+ 
+Changes:
+- Touchpad initialization, packet decoding and processing updated Linux 4.7
+- Bitmap processing overhauled. Can now provide coordinates for 2 fingers simultaneously.
+- Added new device ids for better compatibility.
+- Remove hardcoded variables allowing userspace (plist) settings to apply.
+- Painstakingly optimized default settings to provide the best possible experience.
+- Improve pointer motion calculation, mode switching,… etc.
+- Lots of code cleanups, refactoring.
+- Clean up the IOLog.
