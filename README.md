@@ -14,6 +14,7 @@ Driver Features:
 - 3 and 4-finger gestures (V3+, check the log to find out your hw version).
 - Pointer acceleration and smoothing.
 - Trackstick (movement and scrolling).
+
 ==========================================
  
 Changes:
