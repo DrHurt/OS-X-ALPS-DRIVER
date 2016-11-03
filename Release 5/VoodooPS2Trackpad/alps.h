@@ -33,8 +33,27 @@
 #define ALPS_PROTO_V3_RUSHMORE	0x310
 #define ALPS_PROTO_V4	0x400
 #define ALPS_PROTO_V5	0x500
+#define ALPS_PROTO_V7		0x700	/* t3btl t4s */
 
 #define MAX_TOUCHES     4
+
+/*
+ * enum V7_PACKET_ID - defines the packet type for V7
+ * V7_PACKET_ID_IDLE: There's no finger and no button activity.
+ * V7_PACKET_ID_TWO: There's one or two non-resting fingers on touchpad
+ *  or there's button activities.
+ * V7_PACKET_ID_MULTI: There are at least three non-resting fingers.
+ * V7_PACKET_ID_NEW: The finger position in slot is not continues from
+ *  previous packet.
+ */
+enum V7_PACKET_ID {
+    V7_PACKET_ID_IDLE,
+    V7_PACKET_ID_TWO,
+    V7_PACKET_ID_MULTI,
+    V7_PACKET_ID_NEW,
+    V7_PACKET_ID_UNKNOWN,
+};
+
 
 /**
  * struct alps_model_info - touchpad ID table
@@ -156,6 +175,7 @@ struct alps_data {
     SInt32 addr_command;
     UInt16 proto_version;
     UInt8 byte0, mask0;
+    UInt8 fw_ver[3];
     UInt8 flags;
     SInt32 x_max;
     SInt32 y_max;
@@ -177,7 +197,7 @@ struct alps_data {
 // Pulled out of alps_data, now saved as vars on class
 // makes invoking a little easier
 typedef bool (ApplePS2ALPSGlidePoint::*hw_init)();
-typedef void (ApplePS2ALPSGlidePoint::*decode_fields)(struct alps_fields *f, UInt8 *p);
+typedef bool (ApplePS2ALPSGlidePoint::*decode_fields)(struct alps_fields *f, UInt8 *p);
 typedef void (ApplePS2ALPSGlidePoint::*process_packet)(UInt8 *packet);
 //typedef void (ApplePS2ALPSGlidePoint::*set_abs_params)();
 
@@ -275,15 +295,31 @@ protected:
     
     void processPacketV1V2(UInt8 *packet);
     
-    void decodeButtonsV3(struct alps_fields *f, UInt8 *p);
+    bool decodeButtonsV3(struct alps_fields *f, UInt8 *p);
     
-    void decodePinnacle(struct alps_fields *f, UInt8 *p);
+    bool decodePinnacle(struct alps_fields *f, UInt8 *p);
     
-    void decodeRushmore(struct alps_fields *f, UInt8 *p);
+    bool decodeRushmore(struct alps_fields *f, UInt8 *p);
     
-    void decodeDolphin(struct alps_fields *f, UInt8 *p);
+    bool decodeDolphin(struct alps_fields *f, UInt8 *p);
+    
+    unsigned char alps_get_packet_id_v7(UInt8 *byte);
+    
+    void alps_get_finger_coordinate_v7(struct input_mt_pos *mt,
+                                       UInt8 *pkt,
+                                       UInt8 pkt_id);
+    
+    int alps_get_mt_count(struct input_mt_pos *mt);
+    
+    bool decodeV7(struct alps_fields *f, UInt8 *p);
     
     void processPacketV4(UInt8 *packet);
+    
+    void processTrackstickPacketV7(UInt8 *packet);
+    
+    void processTouchpadPacketV7(UInt8 *packet);
+    
+    void processPacketV7(UInt8 *packet);
     
     bool repeatCmd(SInt32 init_command, SInt32 init_arg, SInt32 repeated_command, ALPSStatus_t *report);
     
@@ -292,6 +328,8 @@ protected:
     bool hwInitV1V2();
     
     bool hwInitV4();
+    
+    bool hwInitV7();
     
     IOReturn probeTrackstickV3(int regBase);
     
@@ -317,7 +355,7 @@ protected:
     
     bool v1v2MagicEnable();
     
-    int alps_get_v3_v7_resolution(int reg_pitch);
+    bool alps_get_v3_v7_resolution(int reg_pitch);
         
 public:
     virtual ApplePS2ALPSGlidePoint * probe(IOService *provider,
