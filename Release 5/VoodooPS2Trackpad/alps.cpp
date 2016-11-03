@@ -292,20 +292,6 @@ PS2InterruptResult ApplePS2ALPSGlidePoint::interruptOccurred(UInt8 data) {
         return kPS2IR_packetBuffering;
     }
     
-    /* alps_is_valid_package_v7 */
-    if (priv.proto_version == ALPS_PROTO_V7) {
-        if ((_packetByteCount == 3 && (packet[2] & 0x40) == 0x40) ||
-            (_packetByteCount == 4 && (packet[3] & 0x48) == 0x48) ||
-            (_packetByteCount == 6 && (packet[5] & 0x40) == 0x00))
-        {
-            _ringBuffer.advanceHead(priv.pktsize);
-            _packetByteCount = 0;
-            return kPS2IR_packetReady;
-        } else {
-            return kPS2IR_packetBuffering;
-        }
-    }
-    
     if (_packetByteCount == priv.pktsize)
     {
         _ringBuffer.advanceHead(priv.pktsize);
