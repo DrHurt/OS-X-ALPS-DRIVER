@@ -1,11 +1,11 @@
 # OS-X-ALPS-DRIVER
 
-This is a driver created for my personal use and optimized for my ALPS V3 Pinnacle on my Dell Inspiron N5110
+This driver is based on Rehabman's VoodooPS2 driver for macOS, Linux 4.7, and bpedman's earlier work. V7 support was ported by coolstarorg.
 
-The Driver is based on Rehabman's VoodooPS2 driver for OS X and bpedman's Linux port of the ALPS driver
+The aim of this driver is to improve the usability of ALPS TouchPads in macOS.
 
 Driver Features:
-- Supports ALPS hardware versions V1-V5
+- Supports ALPS hardware versions V1-V5, V7
 - Supports Mac OS 10.6 to 10.12
 - 1-finger tapping.
 - Side (edge) scrolling (Vertical with inertia, and Horizontal).
