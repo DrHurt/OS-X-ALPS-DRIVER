@@ -1109,6 +1109,7 @@ void ApplePS2ALPSGlidePoint::dispatchEventsWithInfo(int xraw, int yraw, int z, i
         yraw = yraw * xupmm / yupmm;
     }
     
+    /* Dr Hurt: Scale all touchpads' x axis to 6000 to be able to the same divisor for all models */
     if (priv.proto_version == ALPS_PROTO_V2) {
         xraw *= 6;
         yraw *= 6;
@@ -1122,6 +1123,11 @@ void ApplePS2ALPSGlidePoint::dispatchEventsWithInfo(int xraw, int yraw, int z, i
     if (priv.proto_version == ALPS_PROTO_V5) {
         xraw *= 4.4;
         yraw *= 4.4;
+    }
+    
+    if (priv.proto_version == ALPS_PROTO_V7) {
+        xraw *= 1.5;
+        yraw *= 1.5;
     }
     
     int x = xraw;
