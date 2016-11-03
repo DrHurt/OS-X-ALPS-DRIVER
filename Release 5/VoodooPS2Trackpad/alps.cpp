@@ -244,25 +244,13 @@ PS2InterruptResult ApplePS2ALPSGlidePoint::interruptOccurred(UInt8 data) {
     // events need to be delivered. Process the trackpad data. Do NOT issue
     // any BLOCKING commands to our device in this context.
     //
-    // Ignore all bytes until we see the start of a packet, otherwise the
-    // packets may get out of sequence and things will get very confusing.
-    //
     
-    if (priv.proto_version == ALPS_PROTO_V7){
-        // Right now this checks if the packet is either a PS/2 packet (data & 0xc8)
-        // or if the first packet matches the specific trackpad first packet
-        if (0 == _packetByteCount && (data & priv.mask0) != priv.byte0) {
-            IOLog("%s: Unexpected byte0 data (%02x) from PS/2 controller\n", getName(), data);
-            return kPS2IR_packetBuffering;
-        } else if (0 == _packetByteCount && ((data & 0xc8) == 0x08))
-            IOLog("%s: PS/2 Packet Received\n", getName());
+    UInt8* packet = _ringBuffer.head();
+    packet[_packetByteCount++] = data;
+    
+    if ((packet[0] & 0xc8) == 0x08) {
         
-        UInt8 *packet = _ringBuffer.head();
-        packet[_packetByteCount++] = data;
-        
-        if (priv.pktsize == _packetByteCount) {
-            // complete 6/8 or 3-byte packet received...
-            // 3-byte packet is bare PS/2 packet instead of ALPS specific packet
+        if (_packetByteCount == 3) {
             _ringBuffer.advanceHead(priv.pktsize);
             _packetByteCount = 0;
             return kPS2IR_packetReady;
@@ -270,27 +258,56 @@ PS2InterruptResult ApplePS2ALPSGlidePoint::interruptOccurred(UInt8 data) {
         return kPS2IR_packetBuffering;
     }
     
-    // Right now this checks if the packet is either a PS/2 packet (data & 0xc8)
-    // or if the first packet matches the specific trackpad first packet
-    if (0 == _packetByteCount && (data & 0xc8) != 0x08 && (data & priv.mask0) != priv.byte0) {
-        DEBUG_LOG("%s: Unexpected byte0 data (%02x) from PS/2 controller\n", getName(), data);
+    /* Check for PS/2 packet stuffed in the middle of ALPS packet. */
+    
+    if ((priv.flags & ALPS_PS2_INTERLEAVED) &&
+        _packetByteCount >= 4 && (packet[3] & 0x0f) == 0x0f) {
         return kPS2IR_packetBuffering;
     }
     
-    /* Bytes 2 - packet size should have 0 in highest bit */
-    if (_packetByteCount >= 1 && data == 0x80) {
-        DEBUG_LOG("%s: Unexpected byte%d data (%02x) from PS/2 controller\n", getName(), _packetByteCount, data);
-        _packetByteCount = 0;
+    /* Valid first byte */
+    if ((packet[0] & priv.mask0) != priv.byte0) {
         return kPS2IR_packetBuffering;
     }
     
-    UInt8 *packet = _ringBuffer.head();
-    packet[_packetByteCount++] = data;
+    /* Bytes 2 - pktsize should have 0 in the highest bit */
+    if (priv.proto_version < ALPS_PROTO_V5 &&
+        _packetByteCount >= 2 && _packetByteCount <= priv.pktsize &&
+        (packet[_packetByteCount - 1] & 0x80)) {
+        if (priv.proto_version == ALPS_PROTO_V3_RUSHMORE &&
+            _packetByteCount == priv.pktsize) {
+            /*
+             * Some Dell boxes, such as Latitude E6440 or E7440
+             * with closed lid, quite often smash last byte of
+             * otherwise valid packet with 0xff. Given that the
+             * next packet is very likely to be valid let's
+             * report PSMOUSE_FULL_PACKET but not process data,
+             * rather than reporting PSMOUSE_BAD_DATA and
+             * filling the logs.
+             */
+            _ringBuffer.advanceHead(priv.pktsize);
+            _packetByteCount = 0;
+            return kPS2IR_packetReady;
+        }
+        return kPS2IR_packetBuffering;
+    }
     
-    if (priv.pktsize == _packetByteCount ||
-        (kPacketLengthSmall == _packetByteCount && (packet[0] & 0xc8) == 0x08)) {
-        // complete 6/8 or 3-byte packet received...
-        // 3-byte packet is bare PS/2 packet instead of ALPS specific packet
+    /* alps_is_valid_package_v7 */
+    if (priv.proto_version == ALPS_PROTO_V7) {
+        if ((_packetByteCount == 3 && (packet[2] & 0x40) == 0x40) ||
+            (_packetByteCount == 4 && (packet[3] & 0x48) == 0x48) ||
+            (_packetByteCount == 6 && (packet[5] & 0x40) == 0x00))
+        {
+            _ringBuffer.advanceHead(priv.pktsize);
+            _packetByteCount = 0;
+            return kPS2IR_packetReady;
+        } else {
+            return kPS2IR_packetBuffering;
+        }
+    }
+    
+    if (_packetByteCount == priv.pktsize)
+    {
         _ringBuffer.advanceHead(priv.pktsize);
         _packetByteCount = 0;
         return kPS2IR_packetReady;
@@ -302,17 +319,8 @@ void ApplePS2ALPSGlidePoint::packetReady() {
     // empty the ring buffer, dispatching each packet...
     while (_ringBuffer.count() >= priv.pktsize) {
         UInt8 *packet = _ringBuffer.tail();
-        // now we have complete packet, either 6-byte or 3-byte
-        if ((packet[0] & priv.mask0) == priv.byte0) {
-            DEBUG_LOG("ps2: Got pointer event with packet = { %02x, %02x, %02x, %02x, %02x, %02x }\n", packet[0], packet[1], packet[2], packet[3], packet[4], packet[5]);
-            (this->*process_packet)(packet);
-            _ringBuffer.advanceTail(priv.pktsize);
-        } else {
-            DEBUG_LOG("ps2: Intercepted bare PS/2 packet..ignoring\n");
-            // Ignore bare PS/2 packet for now...messes with the actual full 6-byte ALPS packet above
-            //            dispatchRelativePointerEventWithPacket(packet, kPacketLengthSmall);
-            _ringBuffer.advanceTail(kPacketLengthSmall);
-        }
+        (this->*process_packet)(packet);
+        _ringBuffer.advanceTail(priv.pktsize);
     }
 }
 
