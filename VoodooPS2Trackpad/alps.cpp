@@ -1051,19 +1051,34 @@ bool ALPS::alps_decode_packet_v7(struct alps_fields *f, UInt8 *p){
 
 void ALPS::alps_process_trackstick_packet_v7(UInt8 *packet)
 {
-    int x, y, z, left, right, middle;
-    int buttons = 0;
     
-    /* It should be a DualPoint when received trackstick packet */
-    if (!(priv.flags & ALPS_DUALPOINT)) {
-        IOLog("ALPS: Rejected trackstick packet from non DualPoint device");
-        return;
-    }
+    UInt32 buttons = 0, raw_buttons = 0;;
+    int left = 0, right = 0, middle = 0;
+    AbsoluteTime now_abs;
+    int x, y;
     
-    x = ((packet[2] & 0xbf)) | ((packet[3] & 0x10) << 2);
-    y = (packet[3] & 0x07) | (packet[4] & 0xb8) |
-    ((packet[3] & 0x20) << 1);
-    z = (packet[5] & 0x3f) | ((packet[3] & 0x80) >> 1);
+    clock_get_uptime(&now_abs);
+    
+    x  = (0x3f & packet[2]);       /* low 6 bits */
+    x |= (0x10 & packet[3]) << 2;  /* bit 7      */
+    x |= (0x80 & packet[2]);       /* bit 8      */
+    
+    y  = (0x07 & packet[3]);       /* low 3 bits */
+    y |= (0x20 & packet[3]) >> 2;  /* bit 4      */
+    y |= (0x38 & packet[4]) << 1;  /* bits 5 - 7 */
+    y |= (0x80 & packet[4]);       /* bit 8      */
+    
+    //IOLog("ALPS: Dispatch relative PS2 packet: x=%d, y=%d", x, y);
+    
+    /* x sign */
+    if (0x10 & packet[1])
+        x |= -1 << 8;
+
+    
+    /* y sign */
+    if (0x20 & packet[1])
+        y |= -1 << 8;
+
     
     left = (packet[1] & 0x01);
     right = (packet[1] & 0x02) >> 1;
@@ -1073,8 +1088,16 @@ void ALPS::alps_process_trackstick_packet_v7(UInt8 *packet)
     buttons |= right ? 0x02 : 0;
     buttons |= middle ? 0x04 : 0;
     
-    //TODO: V7 Trackstick: Someone with the hardware needs to debug this.
-    //dispatchRelativePointerEventX(x, y, 0, now_abs);
+    // normal mode: middle button is not pressed or no movement made
+    if ( ((0 == x) && (0 == y)) || (0 == (buttons & 0x04))) {
+        //IOLog("ALPS: trackStick: dispatch relative pointer with x=%d, y=%d, buttons=%d\n", x, y, buttons);
+        dispatchRelativePointerEventX(x, -y, buttons, now_abs);
+    } else {
+        // scroll mode
+        //IOLog("ALPS: trackStick: dispatchScrollWheelEventX: dv=%d, dh=%d\n", y, x);
+        y = -y; x = -x;
+        dispatchScrollWheelEventX(y, x, buttons, now_abs);
+    }
 }
 
 void ALPS::alps_process_touchpad_packet_v7(UInt8 *packet){
@@ -1948,7 +1971,7 @@ IOReturn ALPS::alps_probe_trackstick_v3_v7(int regBase) {
     }
     
     /* bit 7: trackstick is present */
-    ret = regVal & 0x80 ? 0 : kIOReturnNoDevice;
+    ret = regVal & 0x80 ? 1 : kIOReturnNoDevice;
     
 error:
     alps_exit_command_mode();
